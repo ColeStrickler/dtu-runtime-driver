@@ -16,13 +16,13 @@
 #include <linux/ioport.h>
 #include <linux/types.h>    // phys_addr_t
 #include <linux/errno.h>    // error codes like -EFAULT
+#include <linux/mutex.h>
 
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Cole");
 MODULE_DESCRIPTION("DTU Rutime Driver");
 MODULE_VERSION("0.1");
-
 
 
 
@@ -39,6 +39,7 @@ MODULE_VERSION("0.1");
 static int major_number;
 static struct cdev my_cdev;
 uint64_t ReadyEphemeralAllocAddr;
+static DEFINE_MUTEX(addr_mutex);
 
 /*
     We use the following convention:
@@ -81,8 +82,10 @@ typedef struct RemapPARequest
 phys_addr_t AllocEphemeralPhysRange(unsigned long RequestRegionSize)
 {
     unsigned long number_regions_needed = ceil_div(RequestRegionSize, Megabyte);
+    mutex_lock(&addr_mutex);
     phys_addr_t begin = ReadyEphemeralAllocAddr;
     ReadyEphemeralAllocAddr += number_regions_needed*Megabyte;
+    mutex_unlock(&addr_mutex);
     return begin;
 }
 
