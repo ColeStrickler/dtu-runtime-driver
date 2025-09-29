@@ -64,7 +64,8 @@ unsigned long _max_(unsigned long a, unsigned long b)
 
 typedef struct RemapPARequest
 {
-    void* u_VA
+    void* u_VA;
+    void* u_NewPA;
 
 }RemapPARequest;
 
@@ -120,6 +121,8 @@ int Handle_IOCTL_REMAP_PA(struct RemapPARequest* RemapPAReq)
     unsigned long pfn  = new_phys_ephemeral >> PAGE_SHIFT;
     if(remap_pfn_range(vma, addr, pfn, region_size, vma->vm_page_prot))
         return -EAGAIN;
+
+    RemapPAReq->u_NewPA = new_phys_ephemeral;
     return 0;
 }   
 
@@ -188,7 +191,13 @@ static long IOCTL_Dispatch(struct file *file, unsigned int cmd, unsigned long ar
             int err;
             if ((err = copy_from_user(&req, (struct RemapPARequest *)arg, sizeof(struct RemapPARequest))))
                 return -EFAULT; // Error copying data
-            return Handle_IOCTL_REMAP_PA(&req);
+            err = Handle_IOCTL_REMAP_PA(&req);
+            if (err)
+                return err;
+            if (copy_to_user((struct RemapPARequest __user *)arg, &req, sizeof(struct RemapPARequest)))
+                return -EFAULT;
+
+            break;
         }
         default:
             return -EINVAL; // Invalid command
