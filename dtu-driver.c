@@ -102,14 +102,20 @@ int Handle_IOCTL_REMAP_PA(struct RemapPARequest* RemapPAReq)
     bool found = false;
     down_read(&current->mm->mmap_lock);
     vma = vma_lookup(current->mm, addr);
-    pr_info("VMA: 0x%lx - 0x%lx, flags=0x%lx\n",
-            vma->vm_start, vma->vm_end, vma->vm_flags);
+   
+   
     up_read(&current->mm->mmap_lock);
     if (!vma)
+    {
+        pr_err("DTU: No VMA found for addr=0x%lx\n", addr);
         return -EFAULT;
+    }
+        
+     pr_info("VMA: 0x%lx - 0x%lx, flags=0x%lx\n",
+            vma->vm_start, vma->vm_end, vma->vm_flags);
     unsigned long region_size = vma->vm_end - vma->vm_start;
     down_write(&current->mm->mmap_lock);
-
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP | VM_PFNMAP;
     /* Unmap existing PTEs for the VMA */
     zap_vma_ptes(vma, vma->vm_start, region_size);
 
@@ -118,6 +124,16 @@ int Handle_IOCTL_REMAP_PA(struct RemapPARequest* RemapPAReq)
 
     
     phys_addr_t new_phys_ephemeral = AllocEphemeralPhysRange(region_size);
+
+    if (!request_mem_region(new_phys_ephemeral, region_size, "dtu-runtime-mmap")) {
+        pr_err("DTU: requested phys region 0x%llx-%llx already claimed\n",
+               new_phys_ephemeral, new_phys_ephemeral+ region_size);
+        return -EBUSY;
+    }
+
+
+
+
     unsigned long pfn  = new_phys_ephemeral >> PAGE_SHIFT;
     if(remap_pfn_range(vma, addr, pfn, region_size, vma->vm_page_prot))
         return -EAGAIN;
@@ -162,12 +178,18 @@ static int mmap_callback(struct file *filp, struct vm_area_struct *vma)
         VM_DONTEXPAND   = do not grow region
         VM_DONTDUMP     = do not include in process core dump 
     */
-    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP | VM_PFNMAP;
 
     phys_addr_t begin_phys = AllocEphemeralPhysRange(request_size);
     pr_info("[DTU Runtime Driver]: mmap_callback() begin_phys=0x%llx\n", begin_phys);
     if (begin_phys == 0x0)
         return -EFAULT;
+
+    if (!request_mem_region(begin_phys, request_size, "dtu-runtime-mmap")) {
+        pr_err("DTU: requested phys region 0x%llx-%llx already claimed\n",
+               begin_phys, begin_phys + request_size);
+        return -EBUSY;
+    }
 
     if (remap_pfn_range(vma,
                         vma->vm_start,
@@ -175,6 +197,8 @@ static int mmap_callback(struct file *filp, struct vm_area_struct *vma)
                         request_size,
                         vma->vm_page_prot))
         return -EAGAIN;
+    //flush_tlb_range(vma, vma->vm_start, vma->vm_end);
+
     return 0;
 }
 /*
@@ -196,7 +220,6 @@ static long IOCTL_Dispatch(struct file *file, unsigned int cmd, unsigned long ar
                 return err;
             if (copy_to_user((struct RemapPARequest __user *)arg, &req, sizeof(struct RemapPARequest)))
                 return -EFAULT;
-
             break;
         }
         default:
